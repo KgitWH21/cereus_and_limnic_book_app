@@ -166,6 +166,119 @@ if (menuBtn) {
     });
 }
 
+// Fullscreen toggle (uses Fullscreen API)
+// Toggling the `app-container` element keeps the rest of the page out of fullscreen.
+function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+}
+function toggleFullscreen() {
+    const el = document.getElementById('app-container') || document.documentElement;
+    if (!isFullscreen()) {
+        // Request fullscreen on the app container
+        if (el.requestFullscreen) {
+            el.requestFullscreen().catch(err => console.warn('Fullscreen request failed:', err));
+        } else if (el.webkitRequestFullscreen) {
+            el.webkitRequestFullscreen();
+        } else if (el.msRequestFullscreen) {
+            el.msRequestFullscreen();
+        }
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen().catch(err => console.warn('Exit fullscreen failed:', err));
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+    }
+}
+
+// Wire up the button and keep its label/state in sync
+const fsBtn = document.getElementById('fullscreen-btn');
+if (fsBtn) {
+    fsBtn.addEventListener('click', toggleFullscreen);
+
+    // Auto-hide HUD when in fullscreen
+    const HUD_AUTOHIDE_DELAY = 2000; // ms
+    let _hudAutoHideTimer = null;
+
+    function showHUD() {
+        const top = document.getElementById('hud-top');
+        const bottom = document.getElementById('hud-bottom');
+        if (top) top.classList.add('visible');
+        if (bottom) bottom.classList.add('visible');
+    }
+    function hideHUD() {
+        // keep HUD visible when the side-menu is open
+        const side = document.getElementById('side-menu');
+        if (side && side.classList.contains('open')) return;
+        const top = document.getElementById('hud-top');
+        const bottom = document.getElementById('hud-bottom');
+        if (top) top.classList.remove('visible');
+        if (bottom) bottom.classList.remove('visible');
+    }
+    function clearHudTimer() {
+        if (_hudAutoHideTimer) {
+            clearTimeout(_hudAutoHideTimer);
+            _hudAutoHideTimer = null;
+        }
+    }
+    function scheduleHudHide() {
+        clearHudTimer();
+        _hudAutoHideTimer = setTimeout(() => {
+            hideHUD();
+            _hudAutoHideTimer = null;
+        }, HUD_AUTOHIDE_DELAY);
+    }
+    function showHUDTemporarily() {
+        if (!isFullscreen()) return; // only auto-show when fullscreen
+        showHUD();
+        scheduleHudHide();
+    }
+
+    const activityHandler = (ev) => {
+        if (!isFullscreen()) return;
+        showHUDTemporarily();
+    };
+
+    document.addEventListener('mousemove', activityHandler, { passive: true });
+    document.addEventListener('touchstart', activityHandler, { passive: true });
+    document.addEventListener('keydown', (ev) => {
+        // let 'f' keep its toggle behavior; other keys reveal HUD while fullscreen
+        if (!isFullscreen()) return;
+        if (ev.key === 'f' || ev.key === 'F') return;
+        activityHandler(ev);
+    });
+
+    const onFullscreenChange = () => {
+        const active = isFullscreen();
+        fsBtn.textContent = active ? '⤢ Exit Fullscreen' : '⤢ Fullscreen';
+        fsBtn.setAttribute('aria-pressed', String(active));
+        document.body.classList.toggle('is-fullscreen', active);
+
+        clearHudTimer();
+        if (active) {
+            // show briefly then auto-hide
+            showHUD();
+            scheduleHudHide();
+        } else {
+            // leaving fullscreen -> ensure HUD visible
+            showHUD();
+        }
+    };
+
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+}
+
+// Optional keyboard shortcut: press "f" to toggle fullscreen (only when focused on the app)
+document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'f' || ev.key === 'F') {
+        // don't intercept when typing in inputs
+        if ((document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable))) return;
+        toggleFullscreen();
+    }
+});
+
 // Register basic themes so `setTheme` works
 try {
     rendition.themes.register("dark", { "body": { "background": "#1a1a1a", "color": "#e0e0e0" } });
