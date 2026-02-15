@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cereus & Limnic | eReader</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-container">
+        <nav id="hud-top" class="hud-element">
+            <button id="menu-btn">☰ Contents</button>
+            <span class="book-title">Cereus & Limnic</span>
+            <div id="font-controls">
+                <button onclick="changeFontSize(-1)">A-</button>
+                <button onclick="changeFontSize(1)">A+</button>
+            </div>
+        
+        </nav>
+
+        <div id="side-menu" class="closed">
+            <h3>Table of Contents</h3>
+            <ul id="toc-list">
+                </ul>
+        </div>
+
+        <div id="viewer"></div>
+
+        <nav id="hud-bottom" class="hud-element">
+            <span id="location-indicator">Loading...</span>
+        </nav>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

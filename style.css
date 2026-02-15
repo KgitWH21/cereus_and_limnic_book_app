@@ -1,0 +1,153 @@
+:root {
+    /* Dark Obsidian for the panels */
+    --ui-bg: rgba(13, 17, 23, 0.95); 
+    
+    /* The Gold/Yellow from your Title */
+    --accent-gold: #FFD700; 
+    
+    /* Neon Blue/Cyan for subtle glows (the 'Limnic' vibe) */
+    --accent-glow: #00d4ff; 
+    
+    /* Text color - slightly off-white for better readability */
+    --text-main: #e6edf3;
+    /* Backwards-compatible variables used elsewhere */
+    --bg: #0f0f0f;
+    --panel: rgba(25,25,25,0.95);
+    --gold: #d4af37;
+}
+
+body {
+    margin: 0; background: var(--bg);
+    color: white; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto;
+    overflow: hidden; touch-action: none;
+}
+
+#app-container { height: 100vh; width: 100vw; position: relative; }
+
+#viewer { height: 100%; width: 100%; position: relative; z-index: 1; }
+
+#viewer iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1; /* Keep the book on the bottom layer */
+}
+
+/* The PDF Canvas */
+#viewer-container {
+    display: flex; justify-content: center; align-items: center;
+    height: 100%; width: 100%;
+}
+
+#pdf-canvas { max-height: 100vh; max-width: 100vw; }
+
+#touch-layer {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%; z-index: 5;
+}
+
+/* Heads-Up Display */
+/* Ensure these are in your style.css */
+.hud-element {
+    position: fixed !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 65px !important;
+    background-color: var(--ui-bg) !important;
+    color: var(--text-main) !important;
+    z-index: 2147483647 !important;
+    pointer-events: none;
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    box-sizing: border-box;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hud-element.visible {
+    transform: translateY(0) !important;
+    pointer-events: auto !important; /* Buttons turn 'on' only when visible */
+}
+
+#hud-top { top: 0; transform: translateY(-101%); border-bottom: 2px solid #00d4ff; }
+#hud-bottom { bottom: 0; transform: translateY(101%); border-top: 2px solid #00d4ff; }
+
+#hud-top { top: 0; transform: translateY(-100%); border-bottom: 1px solid #333; }
+#hud-bottom { bottom: 0; transform: translateY(100%); border-top: 1px solid #333; }
+
+/* The visible state */
+.hud-element.visible {
+    transform: translateY(0) !important;
+    pointer-events: auto; /* This turns the buttons back "on" when the HUD appears */
+}
+
+#hud-top { top: 0; transform: translateY(-100%); }
+#hud-bottom { bottom: 0; transform: translateY(100%); }
+
+#side-menu {
+    position: fixed; left: 0; top: 0; height: 100%; width: 280px;
+    background: var(--panel); z-index: 15;
+    transform: translateX(-100%); transition: transform 0.3s ease;
+    padding: 20px; box-sizing: border-box;
+}
+
+#side-menu.open { transform: translateX(0); }
+
+button { background: none; border: 1px solid var(--gold); color: var(--gold); padding: 8px 12px; border-radius: 4px; }
+
+/* Make HUD buttons inherit readable color per theme */
+.hud-element button { color: inherit; border-color: currentColor; background: transparent; }
+.hud-element .book-title { font-weight: 600; color: inherit; }
+
+/* Theme-specific HUD backgrounds and text */
+body.theme-dark .hud-element { background-color: rgba(13,17,23,0.95); color: #e6edf3; }
+body.theme-sepia .hud-element { background-color: rgba(244,236,216,0.95); color: #5b4636; }
+body.theme-light .hud-element { background-color: rgba(255,255,255,0.96); color: #111111; }
+
+/* Ensure HUD stays visible visually (no flicker) */
+.hud-element { will-change: transform; }
+
+/* TOC readability improvements */
+#side-menu {
+    color: inherit;
+}
+
+#toc-list {
+    list-style: none; margin: 0; padding: 0;
+    /* Ensure the list can scroll up above the bottom HUD */
+    max-height: calc(100vh - 140px); /* leave space for header and bottom HUD */
+    overflow-y: auto;
+    padding-bottom: 120px; /* ensures final item can be scrolled above the HUD */
+}
+
+#toc-list li {
+    padding: 10px 6px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 15px; color: inherit;
+}
+
+/* Theme-specific side-menu text colors */
+body.theme-dark #side-menu { color: #e0e0e0; }
+body.theme-sepia #side-menu { color: #5b4636; }
+body.theme-light #side-menu { color: #111111; }
+
+/* Make the side-menu separators suitable for light theme */
+body.theme-light #toc-list li { border-bottom-color: rgba(0,0,0,0.06); }
+
+/* Make the side menu and TOC scrollable and touch-friendly */
+#side-menu {
+    overflow-y: auto; /* allow vertical scrolling */
+    -webkit-overflow-scrolling: touch; /* smooth scrolling on iOS */
+    touch-action: pan-y; /* allow vertical pan gestures inside the menu */
+}
+
+/* Limit TOC height so it scrolls within the side-menu rather than growing offscreen */
+#toc-list {
+    max-height: calc(100vh - 120px); /* leave room for header/padding */
+    overflow-y: auto;
+}
+
+/* Ensure clicks/scrolls on the side menu are not blocked by global touch settings */
+#side-menu, #toc-list, #side-menu * {
+    pointer-events: auto;
+}
