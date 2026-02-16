@@ -39,10 +39,249 @@ const rendition = book.renderTo("viewer", {
     sandbox: "allow-same-origin allow-scripts"
 });
 
-rendition.display();
+// Defer the initial display until after the dev splash has shown.
+// This ensures the dev logo appears before the book cover.
+const SPLASH_DURATION_MS = 1000; // adjust as needed
+function performInitialDisplay() {
+    try { rendition.display(); } catch (e) { console.warn('Initial rendition.display() failed:', e); }
+}
+
+const _splashEl = document.getElementById('dev-splash');
+if (_splashEl) {
+    // mark body so CSS can hide HUD while splash active
+    document.body.classList.add('splash-active');
+
+    let _splashTimer = setTimeout(() => {
+        _splashEl.classList.add('splash-hidden');
+        document.body.classList.remove('splash-active');
+        setTimeout(() => { _splashEl.remove(); }, 420);
+        performInitialDisplay();
+    }, SPLASH_DURATION_MS);
+
+    // allow click/tap to skip splash early
+    _splashEl.addEventListener('click', () => {
+        clearTimeout(_splashTimer);
+        _splashEl.classList.add('splash-hidden');
+        document.body.classList.remove('splash-active');
+        setTimeout(() => { _splashEl.remove(); }, 200);
+        performInitialDisplay();
+    }, { once: true });
+} else {
+    performInitialDisplay();
+}
+
+// Audio manifest + HUD audio player (per-chapter mapping + resume)
+// Loads `manifest.json` and prepares a small audio player that shows the
+// chapter title (from the manifest) while audio is playing.
+let audioManifest = [];
+
+// Robust loader: manifest.json may be encoded as UTF-16LE due to editor choice.
+// Read as ArrayBuffer and try UTF-8 first, then UTF-16LE (with BOM stripping).
+(async function loadAudioManifest() {
+    try {
+        const res = await fetch('manifest.json');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const buf = await res.arrayBuffer();
+        let text = '';
+
+        // Check for UTF-16LE BOM (FF FE)
+        const bytes = new Uint8Array(buf);
+        if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+            text = new TextDecoder('utf-16le').decode(buf.slice(2));
+        } else {
+            // Try UTF-8 (will skip BOM if present)
+            text = new TextDecoder('utf-8').decode(buf).replace(/^\uFEFF/, '');
+        }
+
+        const parsed = JSON.parse(text);
+        audioManifest = parsed || [];
+        console.log('[audioManifest] loaded successfully:', audioManifest.length, 'chapters');
+        try { audioManager.setManifest(audioManifest); } catch (e) {}
+        return;
+    } catch (err) {
+        console.warn('Could not load manifest.json for audio (falling back to empty manifest):', err);
+        audioManifest = [];
+        try { audioManager.setManifest(audioManifest); } catch (e) {}
+    }
+})();
+
+const audioManager = {
+    manifest: audioManifest,
+    audioEl: null,
+    listenBtn: null,
+    playerEl: null,
+    titleEl: null,
+    closeBtn: null,
+    hudBottom: null,
+    currentItem: null,
+
+    init() {
+        this.audioEl = document.getElementById('chapter-audio');
+        this.listenBtn = document.getElementById('listen-btn');
+        this.playerEl = document.getElementById('audio-player');
+        this.titleEl = document.getElementById('audio-title');
+        this.closeBtn = document.getElementById('close-audio');
+        this.hudBottom = document.getElementById('hud-bottom');
+
+        console.log('[audioManager.init]', { audioEl: !!this.audioEl, listenBtn: !!this.listenBtn, playerEl: !!this.playerEl, titleEl: !!this.titleEl, closeBtn: !!this.closeBtn, hudBottom: !!this.hudBottom });
+
+        if (!this.listenBtn || !this.audioEl) {
+            console.warn('[audioManager.init] missing required DOM elements');
+            return;
+        }
+
+        this.listenBtn.addEventListener('click', () => {
+            if (this.listenBtn.disabled) return;
+            this.openPlayer();
+        });
+
+        this.closeBtn && this.closeBtn.addEventListener('click', () => this.closePlayer());
+
+        this.audioEl.addEventListener('timeupdate', () => {
+            if (!this.currentItem) return;
+            const key = 'audioPos:' + this.currentItem.file;
+            try { localStorage.setItem(key, Math.floor(this.audioEl.currentTime)); } catch (e) {}
+        });
+
+        this.audioEl.addEventListener('play', () => { this.updateTitle(true); });
+        this.audioEl.addEventListener('pause', () => { this.updateTitle(false); });
+    },
+
+    setManifest(m) { this.manifest = m || []; },
+
+    getManifestForNavIndex(idx) {
+        if (!this.manifest || !this.manifest.length) return null;
+        return this.manifest.find(it => Number(it.id) === (idx + 1)) || null;
+    },
+
+    async setChapterByNavIndex(idx) {
+        const item = this.getManifestForNavIndex(idx);
+        console.log('[audioManager] setChapterByNavIndex:', idx, 'manifest item:', item);
+        if (!item) { this.disable(); return; }
+        // if switching chapters while playing, stop current audio
+        if (this.currentItem && this.currentItem.file !== item.file) {
+            this.closePlayer();
+        }
+        this.currentItem = item;
+        this.updateTitle(false);
+        const path = 'audio/' + item.file;
+        const exists = await this._fileExists(path);
+        console.log('[audioManager] checking', path, '-> exists:', exists);
+        if (exists) {
+            this.listenBtn.disabled = false;
+            this.listenBtn.dataset.src = path;
+            console.log('[audioManager] button enabled for', item.title);
+        } else {
+            this.listenBtn.disabled = true;
+            this.listenBtn.dataset.src = '';
+            console.log('[audioManager] button disabled (file not found)');
+        }
+    },
+
+    openPlayer() {
+        if (!this.currentItem) return;
+        const src = this.listenBtn.dataset.src || ('audio/' + this.currentItem.file);
+        if (this.audioEl.src !== src) {
+            this.audioEl.src = src;
+            try { this.audioEl.load(); } catch (e) {}
+            this._restorePosition();
+        }
+        this.hudBottom.classList.add('audio-open');
+        this.playerEl.setAttribute('aria-hidden', 'false');
+    },
+
+    closePlayer() {
+        this.hudBottom.classList.remove('audio-open');
+        this.playerEl.setAttribute('aria-hidden', 'true');
+        try { this.audioEl.pause(); } catch (e) {}
+    },
+
+    updateTitle(isPlaying) {
+        if (!this.titleEl) return;
+        if (this.currentItem && isPlaying) {
+            this.titleEl.textContent = this.currentItem.title;
+            this.titleEl.classList.add('playing');
+        } else if (this.currentItem) {
+            this.titleEl.textContent = this.currentItem.title;
+            this.titleEl.classList.remove('playing');
+        } else {
+            this.titleEl.textContent = '';
+            this.titleEl.classList.remove('playing');
+        }
+    },
+
+    _restorePosition() {
+        if (!this.currentItem) return;
+        const key = 'audioPos:' + this.currentItem.file;
+        const s = localStorage.getItem(key);
+        if (s && !isNaN(s)) {
+            try { this.audioEl.currentTime = Math.max(0, Number(s) - 1); } catch (e) {}
+        }
+    },
+
+    async _fileExists(path) {
+        try {
+            const res = await fetch(path, { method: 'HEAD' });
+            return res && res.ok;
+        } catch (e) {
+            // HEAD checks can fail in local/file:// environments or due to CORS —
+            // assume the file may exist and let the audio element handle errors.
+            console.warn('HEAD check failed for', path, e);
+            return true;
+        }
+    },
+
+    disable() {
+        if (this.listenBtn) this.listenBtn.disabled = true;
+        this.currentItem = null;
+        if (this.titleEl) this.titleEl.textContent = '';
+        try { this.audioEl && this.audioEl.pause(); } catch (e) {}
+        try { this.hudBottom && this.hudBottom.classList.remove('audio-open'); } catch (e) {}
+    }
+};
+
+audioManager.init();
+
+// map section href to nav index (best-effort)
+// handles URL encoding mismatches (e.g., %28 vs literal parentheses)
+function sectionToNavIndex(sectionHref, navArray) {
+    if (!sectionHref || !navArray || navArray.length === 0) {
+        console.log('[sectionToNavIndex] invalid inputs - sectionHref:', sectionHref, 'navArray.length:', navArray?.length);
+        return -1;
+    }
+    // Normalize: decode the section href and also prepare a version for case-insensitive matching
+    const decodedSection = decodeURIComponent(sectionHref).toLowerCase();
+    
+    for (let i = 0; i < navArray.length; i++) {
+        if (!navArray[i]) continue; // skip undefined items
+        const nh = navArray[i].href || '';
+        if (!nh) continue;
+        const decodedNav = decodeURIComponent(nh).toLowerCase();
+        
+        // Try various matching strategies
+        if (decodedSection.indexOf(decodedNav) !== -1 || decodedNav.indexOf(decodedSection) !== -1 ||
+            decodedNav === decodedSection) {
+            console.log('[sectionToNavIndex] matched section', sectionHref, '-> nav index', i, '(href:', nh, ')');
+            return i;
+        }
+    }
+    console.log('[sectionToNavIndex] no match found for', sectionHref, 'in', navArray.length, 'nav items');
+    return -1;
+}
 
 // The "rendered" event fires when a section is loaded
 rendition.on("rendered", (section, view) => {
+    // Update audio manager: map current section -> toc index -> manifest
+    try {
+        const idx = sectionToNavIndex(section.href, window.bookNav || []);
+        console.log('[rendition.rendered]', 'section.href:', section.href, 'detected chapter index:', idx);
+        if (typeof audioManager !== 'undefined') {
+            if (idx !== -1) audioManager.setChapterByNavIndex(idx);
+            else audioManager.disable();
+        }
+    } catch (e) { console.error('[rendition.rendered] error in audio mapping:', e); }
+
     // Check if the iframe and document exist
     const iframe = view.iframe;
     if (iframe && iframe.contentDocument) {
@@ -124,11 +363,22 @@ rendition.on("rendered", (section, view) => {
 
 // Load the Table of Contents
 book.loaded.navigation.then((nav) => {
+    // expose nav for helpers (section -> toc mapping)
+    // convert to real array (EPUBjs may return array-like object)
+    window.bookNav = Array.from(nav || []);
+    console.log('[bookNav] loaded:', window.bookNav.length, 'chapters');
+    if (window.bookNav.length > 0) {
+        const firstValid = window.bookNav.find(n => n && n.label);
+        if (firstValid) console.log('[bookNav] first valid:', firstValid.label, firstValid.href);
+        else console.log('[bookNav] warning: all nav items are undefined or missing label');
+    }
+
     const tocList = document.getElementById("toc-list");
     tocList.innerHTML = ""; // Clear existing
     nav.forEach((chapter) => {
+        if (!chapter) return; // skip undefined items
         const li = document.createElement("li");
-        li.textContent = chapter.label;
+        li.textContent = chapter.label || "(untitled)";
         li.style.cursor = "pointer";
         li.onclick = () => {
             rendition.display(chapter.href);
@@ -136,6 +386,32 @@ book.loaded.navigation.then((nav) => {
         };
         tocList.appendChild(li);
     });
+
+    // Ensure audioManager is aware of the section currently displayed (fixes initial disabled state)
+    try {
+        const getCurrentHref = () => {
+            try {
+                // epub.js: prefer currentLocation() then fallback to location()
+                const cur = (typeof rendition.currentLocation === 'function') ? rendition.currentLocation() : (typeof rendition.location === 'function' ? rendition.location() : null);
+                if (cur && cur.start && cur.start.href) return cur.start.href;
+            } catch (e) { /* ignore */ }
+
+            // fallback: use first active view if available
+            try {
+                const views = (rendition && rendition.manager && rendition.manager.views) ? rendition.manager.views : [];
+                if (views.length && views[0] && views[0].section) return views[0].section.href || views[0].href || null;
+            } catch (e) {}
+            return null;
+        };
+
+        const curHref = getCurrentHref();
+        const idx = sectionToNavIndex(curHref, window.bookNav || []);
+        if (idx !== -1 && typeof audioManager !== 'undefined') {
+            audioManager.setChapterByNavIndex(idx);
+        }
+    } catch (e) {
+        // non-fatal
+    }
 });
 
 // progress update when location changes

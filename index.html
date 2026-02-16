@@ -7,6 +7,14 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div id="dev-splash" class="dev-splash" role="img" aria-label="Developer splash">
+        <div class="dev-splash-inner">
+            <div class="dev-logo-mark">
+                <img src="HAC_studios_logo_2026.png" alt="HAC Studios logo" class="dev-logo-img" />
+            </div>
+            <div class="dev-logo-text">DEVELOPED</div>
+        </div>
+    </div>
     <div id="app-container">
         <nav id="hud-top" class="hud-element">
             <button id="menu-btn">☰ Contents</button>
@@ -29,7 +37,21 @@
         <div id="viewer"></div>
 
         <nav id="hud-bottom" class="hud-element">
-            <span id="location-indicator">Loading...</span>
+            <div class="hud-left">
+                <span id="location-indicator">Loading...</span>
+            </div>
+
+            <div class="hud-right audio-hud">
+                <button id="listen-btn" class="listen-btn" aria-pressed="false" aria-label="Listen to this chapter" disabled>Listen</button>
+
+                <div id="audio-player" class="audio-player" aria-hidden="true" role="region" aria-label="Audio player">
+                    <div class="audio-meta">
+                        <div id="audio-title" class="audio-title" aria-live="polite"></div>
+                    </div>
+                    <audio id="chapter-audio" preload="none" controls></audio>
+                    <button id="close-audio" class="close-audio" aria-label="Close audio">✕</button>
+                </div>
+            </div>
         </nav>
     </div>
 
