@@ -7,6 +7,12 @@ This app now follows the Hayden Brave pattern with two separate sibling modes:
 
 The root `index.html` is a mode selector that links to both.
 
+## Branch workflow
+
+- Treat `main` as the production branch unless deployment configuration is added that explicitly points elsewhere.
+- Do new feature work on short-lived branches, then merge reviewed changes back into `main`.
+- Keep deployment-oriented changes deliberate so feature branches stay safe for iteration.
+
 ## File placement
 
 - Place the EPUB at the project root as `Cereus_and_Limnic.epub`
