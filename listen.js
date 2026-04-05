@@ -1,5 +1,6 @@
 const MANIFEST_PATH = "manifest.json";
 const AUDIO_DIR = "audio/";
+const GITHUB_MEDIA_AUDIO_BASE = "https://media.githubusercontent.com/media/KgitWH21/cereus_and_limnic_book_app/main/audio/";
 
 const STORAGE_KEYS = {
     lastTrack: "cereusLimnic.listening.track",
@@ -91,6 +92,24 @@ function resolveTrackPath(fileName) {
     }
 
     return `${AUDIO_DIR}${fileName}`;
+}
+
+function buildGitHubMediaPath(fileName) {
+    return `${GITHUB_MEDIA_AUDIO_BASE}${String(fileName)
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/")}`;
+}
+
+function isLikelyLfsPointerResponse(response) {
+    if (!response?.ok) {
+        return false;
+    }
+
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    const contentLength = Number(response.headers.get("content-length") || "0");
+
+    return contentType.includes("text/plain") && Number.isFinite(contentLength) && contentLength > 0 && contentLength < 1024;
 }
 
 async function readManifestFile() {
@@ -254,11 +273,43 @@ function renderTrackList() {
 async function checkAudioAvailability(filePath) {
     try {
         const response = await fetch(filePath, { method: "HEAD" });
-        return response.ok;
+        return response;
     } catch (error) {
         console.warn("Audio availability check failed:", error);
         return null;
     }
+}
+
+async function resolvePlayableTrackPath(track) {
+    if (!track?.file) {
+        return "";
+    }
+
+    if (track.url) {
+        return track.url;
+    }
+
+    const localPath = resolveTrackPath(track.file);
+    if (/^(https?:)?\/\//.test(localPath)) {
+        return localPath;
+    }
+
+    const localResponse = await checkAudioAvailability(localPath);
+    if (localResponse?.ok && !isLikelyLfsPointerResponse(localResponse)) {
+        return localPath;
+    }
+
+    const githubMediaPath = buildGitHubMediaPath(track.file);
+    const githubMediaResponse = await checkAudioAvailability(githubMediaPath);
+    if (githubMediaResponse?.ok) {
+        return githubMediaPath;
+    }
+
+    if (localResponse?.ok) {
+        return localPath;
+    }
+
+    return githubMediaPath;
 }
 
 function updateTrackDetails(track) {
@@ -306,11 +357,11 @@ async function selectTrack(index, options = {}) {
         return;
     }
 
-    const nextSource = resolveTrackPath(track.file);
+    const nextSource = await resolvePlayableTrackPath(track);
     setStatus(`Loading ${track.title}...`);
 
     const availability = await checkAudioAvailability(nextSource);
-    if (availability === false) {
+    if (availability === null || availability.ok === false) {
         elements.audio.removeAttribute("src");
         elements.audio.dataset.file = "";
         elements.audio.load();
@@ -392,8 +443,26 @@ function moveTrack(direction, options = {}) {
     selectTrack(nextIndex, { autoplay: shouldAutoplay });
 }
 
-function handleAudioError() {
+async function handleAudioError() {
     const track = state.tracks[state.currentIndex];
+    const fallbackSource = track?.file ? buildGitHubMediaPath(track.file) : "";
+
+    if (
+        track &&
+        elements.audio &&
+        fallbackSource &&
+        elements.audio.src !== fallbackSource
+    ) {
+        const fallbackAvailability = await checkAudioAvailability(fallbackSource);
+        if (fallbackAvailability?.ok) {
+            elements.audio.src = fallbackSource;
+            elements.audio.dataset.file = track.file;
+            elements.audio.load();
+            setStatus(`Retrying ${track.title} from the media host...`);
+            return;
+        }
+    }
+
     const fileName = track?.file || "unknown file";
     setStatus(`Unable to play ${fileName}. Verify the file exists in /audio or update manifest.json.`, true);
     updatePlayPauseButton();
