@@ -1,655 +1,615 @@
-const bookPath = "Cereus_and_Limnic.epub"; // correct filename
+const bookPath = "Cereus_and_Limnic.epub";
 
-// Quick network check to surface 404/CORS early in DevTools/UI
-fetch(bookPath, { method: 'HEAD' })
-  .then(res => {
-    if (!res.ok) {
-      const msg = `EPUB fetch error: ${res.status} ${res.statusText}`;
-      console.error(msg);
-      const loc = document.getElementById('location-indicator');
-      if (loc) loc.textContent = 'Book not reachable — see console';
-      throw new Error(msg);
+const SPLASH_DURATION_MS = 1400;
+const HUD_AUTOHIDE_DELAY = 2200;
+const MIN_FONT_SIZE = 80;
+const MAX_FONT_SIZE = 180;
+const FONT_STEP = 10;
+
+const STORAGE_KEYS = {
+    readerLocation: "cereusLimnic.reading.position",
+    readerTheme: "cereusLimnic.reading.theme",
+    readerFontSize: "cereusLimnic.reading.fontSize",
+};
+
+function safeStorageGet(key) {
+    try {
+        return window.localStorage.getItem(key);
+    } catch (error) {
+        console.warn("Could not read from localStorage:", error);
+        return null;
     }
-    console.log('EPUB reachable:', res.status);
-  })
-  .catch(err => {
-    console.warn('EPUB network check failed:', err);
-  });
+}
+
+function safeStorageSet(key, value) {
+    try {
+        window.localStorage.setItem(key, value);
+    } catch (error) {
+        console.warn("Could not write to localStorage:", error);
+    }
+}
+
+function loadStoredFontSize() {
+    const storedValue = Number(safeStorageGet(STORAGE_KEYS.readerFontSize));
+    if (!Number.isFinite(storedValue)) {
+        return 100;
+    }
+
+    return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, storedValue));
+}
+
+function loadStoredTheme() {
+    const storedTheme = safeStorageGet(STORAGE_KEYS.readerTheme);
+    return storedTheme || "dark";
+}
+
+const state = {
+    currentFontSize: loadStoredFontSize(),
+    currentTheme: loadStoredTheme(),
+    splashDismissed: false,
+    bookNav: [],
+    hudAutoHideTimer: null,
+    lastHudToggle: 0,
+};
+
+const elements = {
+    body: document.body,
+    appContainer: document.getElementById("app-container"),
+    splash: document.getElementById("dev-splash"),
+    viewer: document.getElementById("viewer"),
+    hudTop: document.getElementById("hud-top"),
+    hudBottom: document.getElementById("hud-bottom"),
+    menuButton: document.getElementById("menu-btn"),
+    menuCloseButton: document.getElementById("menu-close-btn"),
+    sideMenu: document.getElementById("side-menu"),
+    tocList: document.getElementById("toc-list"),
+    locationIndicator: document.getElementById("location-indicator"),
+    fullscreenButton: document.getElementById("fullscreen-btn"),
+    themeButtons: Array.from(document.querySelectorAll("[data-theme]")),
+};
+
+fetch(bookPath, { method: "HEAD" })
+    .then((response) => {
+        if (!response.ok) {
+            throw new Error(`EPUB fetch error: ${response.status} ${response.statusText}`);
+        }
+    })
+    .catch((error) => {
+        console.warn("EPUB network check failed:", error);
+    });
 
 const book = ePub(bookPath);
 
-// Friendly error if opening fails
-book.ready.catch(err => {
-    console.error('Failed to open EPUB:', err);
-    const loc = document.getElementById('location-indicator');
-    if (loc) loc.textContent = 'Failed to load book — see console';
+book.ready.catch((error) => {
+    console.error("Failed to open EPUB:", error);
+    updateLocationIndicator("Failed to load Cereus & Limnic. Serve the folder over HTTP and check the console.");
 });
 
-// Generate locations for progress (improves percentage/TOC behavior)
-book.ready.then(() => book.locations.generate(1200)).catch(err => {
-    console.warn('Could not generate locations:', err);
-});
+book.ready
+    .then(() => book.locations.generate(1200))
+    .catch((error) => {
+        console.warn("Could not generate locations:", error);
+    });
 
 const rendition = book.renderTo("viewer", {
     width: "100%",
     height: "100vh",
     flow: "paginated",
     manager: "default",
-    // ADD THIS LINE BELOW
-    sandbox: "allow-same-origin allow-scripts"
+    sandbox: "allow-same-origin allow-scripts",
 });
 
-// Defer the initial display until after the dev splash has shown.
-// This ensures the dev logo appears before the book cover.
-const SPLASH_DURATION_MS = 1000; // adjust as needed
-function performInitialDisplay() {
-    try { rendition.display(); } catch (e) { console.warn('Initial rendition.display() failed:', e); }
+function updateLocationIndicator(text) {
+    if (elements.locationIndicator) {
+        elements.locationIndicator.textContent = text;
+    }
 }
 
-const _splashEl = document.getElementById('dev-splash');
-if (_splashEl) {
-    // mark body so CSS can hide HUD while splash active
-    document.body.classList.add('splash-active');
+function showHUD() {
+    elements.hudTop?.classList.add("visible");
+    elements.hudBottom?.classList.add("visible");
+}
 
-    let _splashTimer = setTimeout(() => {
-        _splashEl.classList.add('splash-hidden');
-        document.body.classList.remove('splash-active');
-        setTimeout(() => { _splashEl.remove(); }, 420);
-        performInitialDisplay();
-    }, SPLASH_DURATION_MS);
+function hideHUD() {
+    if (elements.sideMenu?.classList.contains("open")) {
+        return;
+    }
 
-    // allow click/tap to skip splash early
-    _splashEl.addEventListener('click', () => {
-        clearTimeout(_splashTimer);
-        _splashEl.classList.add('splash-hidden');
-        document.body.classList.remove('splash-active');
-        setTimeout(() => { _splashEl.remove(); }, 200);
-        performInitialDisplay();
-    }, { once: true });
-} else {
+    elements.hudTop?.classList.remove("visible");
+    elements.hudBottom?.classList.remove("visible");
+}
+
+function toggleHUD() {
+    const shouldShow = !elements.hudTop?.classList.contains("visible");
+
+    if (shouldShow) {
+        showHUD();
+    } else {
+        hideHUD();
+    }
+
+    state.lastHudToggle = Date.now();
+
+    if (isFullscreen() && shouldShow) {
+        scheduleHudHide();
+    } else if (!shouldShow) {
+        clearHudHideTimer();
+    }
+}
+
+function openSideMenu() {
+    elements.sideMenu?.classList.add("open");
+    elements.menuButton?.setAttribute("aria-expanded", "true");
+    showHUD();
+    clearHudHideTimer();
+}
+
+function closeSideMenu() {
+    elements.sideMenu?.classList.remove("open");
+    elements.menuButton?.setAttribute("aria-expanded", "false");
+
+    if (isFullscreen()) {
+        scheduleHudHide();
+    }
+}
+
+function performInitialDisplay() {
+    const savedLocation = safeStorageGet(STORAGE_KEYS.readerLocation);
+    const initialDisplay = savedLocation ? rendition.display(savedLocation) : rendition.display();
+
+    Promise.resolve(initialDisplay).catch((error) => {
+        console.warn("Could not restore reading position, falling back to book start:", error);
+        rendition.display();
+    });
+}
+
+function dismissSplash() {
+    if (!elements.splash || state.splashDismissed) {
+        return;
+    }
+
+    state.splashDismissed = true;
+    elements.splash.classList.add("splash-hidden");
+    elements.body.classList.remove("splash-active");
+
+    window.setTimeout(() => {
+        elements.splash?.remove();
+    }, 420);
+
     performInitialDisplay();
 }
 
-// Audio manifest + HUD audio player (per-chapter mapping + resume)
-// Loads `manifest.json` and prepares a small audio player that shows the
-// chapter title (from the manifest) while audio is playing.
-let audioManifest = [];
+elements.body.classList.add("splash-active");
 
-// Robust loader: manifest.json may be encoded as UTF-16LE due to editor choice.
-// Read as ArrayBuffer and try UTF-8 first, then UTF-16LE (with BOM stripping).
-(async function loadAudioManifest() {
-    try {
-        const res = await fetch('manifest.json');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+if (elements.splash) {
+    const splashTimer = window.setTimeout(dismissSplash, SPLASH_DURATION_MS);
+    elements.splash.addEventListener(
+        "click",
+        () => {
+            window.clearTimeout(splashTimer);
+            dismissSplash();
+        },
+        { once: true }
+    );
+} else {
+    elements.body.classList.remove("splash-active");
+    performInitialDisplay();
+}
 
-        const buf = await res.arrayBuffer();
-        let text = '';
-
-        // Check for UTF-16LE BOM (FF FE)
-        const bytes = new Uint8Array(buf);
-        if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
-            text = new TextDecoder('utf-16le').decode(buf.slice(2));
-        } else {
-            // Try UTF-8 (will skip BOM if present)
-            text = new TextDecoder('utf-8').decode(buf).replace(/^\uFEFF/, '');
-        }
-
-        const parsed = JSON.parse(text);
-        audioManifest = parsed || [];
-        console.log('[audioManifest] loaded successfully:', audioManifest.length, 'chapters');
-        try { audioManager.setManifest(audioManifest); } catch (e) {}
-        return;
-    } catch (err) {
-        console.warn('Could not load manifest.json for audio (falling back to empty manifest):', err);
-        audioManifest = [];
-        try { audioManager.setManifest(audioManifest); } catch (e) {}
-    }
-})();
-
-const audioManager = {
-    manifest: audioManifest,
-    audioEl: null,
-    listenBtn: null,
-    playerEl: null,
-    titleEl: null,
-    closeBtn: null,
-    hudBottom: null,
-    currentItem: null,
-
-    init() {
-        this.audioEl = document.getElementById('chapter-audio');
-        this.listenBtn = document.getElementById('listen-btn');
-        this.playerEl = document.getElementById('audio-player');
-        this.titleEl = document.getElementById('audio-title');
-        this.closeBtn = document.getElementById('close-audio');
-        this.hudBottom = document.getElementById('hud-bottom');
-
-        console.log('[audioManager.init]', { audioEl: !!this.audioEl, listenBtn: !!this.listenBtn, playerEl: !!this.playerEl, titleEl: !!this.titleEl, closeBtn: !!this.closeBtn, hudBottom: !!this.hudBottom });
-
-        if (!this.listenBtn || !this.audioEl) {
-            console.warn('[audioManager.init] missing required DOM elements');
+function flattenNavigation(items, depth = 0, output = []) {
+    items.forEach((item) => {
+        if (!item) {
             return;
         }
 
-        this.listenBtn.addEventListener('click', () => {
-            if (this.listenBtn.disabled) return;
-            this.openPlayer();
+        output.push({
+            id: item.id,
+            label: item.label || "(untitled)",
+            href: item.href,
+            depth,
         });
 
-        this.closeBtn && this.closeBtn.addEventListener('click', () => this.closePlayer());
-
-        this.audioEl.addEventListener('timeupdate', () => {
-            if (!this.currentItem) return;
-            const key = 'audioPos:' + this.currentItem.file;
-            try { localStorage.setItem(key, Math.floor(this.audioEl.currentTime)); } catch (e) {}
-        });
-
-        this.audioEl.addEventListener('play', () => { this.updateTitle(true); });
-        this.audioEl.addEventListener('pause', () => { this.updateTitle(false); });
-    },
-
-    setManifest(m) { this.manifest = m || []; },
-
-    getManifestForNavIndex(idx) {
-        if (!this.manifest || !this.manifest.length) return null;
-        return this.manifest.find(it => Number(it.id) === (idx + 1)) || null;
-    },
-
-    async setChapterByNavIndex(idx) {
-        const item = this.getManifestForNavIndex(idx);
-        console.log('[audioManager] setChapterByNavIndex:', idx, 'manifest item:', item);
-        if (!item) { this.disable(); return; }
-        // if switching chapters while playing, stop current audio
-        if (this.currentItem && this.currentItem.file !== item.file) {
-            this.closePlayer();
+        const childItems = Array.from(item.subitems || []);
+        if (childItems.length > 0) {
+            flattenNavigation(childItems, depth + 1, output);
         }
-        this.currentItem = item;
-        this.updateTitle(false);
-        const path = 'audio/' + item.file;
-        const exists = await this._fileExists(path);
-        console.log('[audioManager] checking', path, '-> exists:', exists);
-        if (exists) {
-            this.listenBtn.disabled = false;
-            this.listenBtn.dataset.src = path;
-            console.log('[audioManager] button enabled for', item.title);
-        } else {
-            this.listenBtn.disabled = true;
-            this.listenBtn.dataset.src = '';
-            console.log('[audioManager] button disabled (file not found)');
-        }
-    },
+    });
 
-    openPlayer() {
-        if (!this.currentItem) return;
-        const src = this.listenBtn.dataset.src || ('audio/' + this.currentItem.file);
-        if (this.audioEl.src !== src) {
-            this.audioEl.src = src;
-            try { this.audioEl.load(); } catch (e) {}
-            this._restorePosition();
-        }
-        this.hudBottom.classList.add('audio-open');
-        this.playerEl.setAttribute('aria-hidden', 'false');
-    },
+    return output;
+}
 
-    closePlayer() {
-        this.hudBottom.classList.remove('audio-open');
-        this.playerEl.setAttribute('aria-hidden', 'true');
-        try { this.audioEl.pause(); } catch (e) {}
-    },
-
-    updateTitle(isPlaying) {
-        if (!this.titleEl) return;
-        if (this.currentItem && isPlaying) {
-            this.titleEl.textContent = this.currentItem.title;
-            this.titleEl.classList.add('playing');
-        } else if (this.currentItem) {
-            this.titleEl.textContent = this.currentItem.title;
-            this.titleEl.classList.remove('playing');
-        } else {
-            this.titleEl.textContent = '';
-            this.titleEl.classList.remove('playing');
-        }
-    },
-
-    _restorePosition() {
-        if (!this.currentItem) return;
-        const key = 'audioPos:' + this.currentItem.file;
-        const s = localStorage.getItem(key);
-        if (s && !isNaN(s)) {
-            try { this.audioEl.currentTime = Math.max(0, Number(s) - 1); } catch (e) {}
-        }
-    },
-
-    async _fileExists(path) {
-        try {
-            const res = await fetch(path, { method: 'HEAD' });
-            return res && res.ok;
-        } catch (e) {
-            // HEAD checks can fail in local/file:// environments or due to CORS —
-            // assume the file may exist and let the audio element handle errors.
-            console.warn('HEAD check failed for', path, e);
-            return true;
-        }
-    },
-
-    disable() {
-        if (this.listenBtn) this.listenBtn.disabled = true;
-        this.currentItem = null;
-        if (this.titleEl) this.titleEl.textContent = '';
-        try { this.audioEl && this.audioEl.pause(); } catch (e) {}
-        try { this.hudBottom && this.hudBottom.classList.remove('audio-open'); } catch (e) {}
+function buildToc(nav) {
+    if (!elements.tocList) {
+        return;
     }
-};
 
-audioManager.init();
+    const items = Array.from(nav?.toc || nav || []);
+    state.bookNav = flattenNavigation(items);
+    elements.tocList.innerHTML = "";
 
-// map section href to nav index (best-effort)
-// handles URL encoding mismatches (e.g., %28 vs literal parentheses)
-function sectionToNavIndex(sectionHref, navArray) {
-    if (!sectionHref || !navArray || navArray.length === 0) {
-        console.log('[sectionToNavIndex] invalid inputs - sectionHref:', sectionHref, 'navArray.length:', navArray?.length);
+    state.bookNav.forEach((chapter) => {
+        const listItem = document.createElement("li");
+        const button = document.createElement("button");
+
+        button.type = "button";
+        button.textContent = chapter.label;
+        button.style.setProperty("--toc-depth", String(chapter.depth || 0));
+        button.addEventListener("click", () => {
+            rendition.display(chapter.href);
+            closeSideMenu();
+        });
+
+        listItem.appendChild(button);
+        elements.tocList.appendChild(listItem);
+    });
+
+    if (state.bookNav.length === 0) {
+        updateLocationIndicator("Opened Cereus & Limnic, but no table of contents was found.");
+    }
+}
+
+function sectionToNavIndex(sectionHref) {
+    if (!sectionHref || state.bookNav.length === 0) {
         return -1;
     }
-    // Normalize: decode the section href and also prepare a version for case-insensitive matching
+
     const decodedSection = decodeURIComponent(sectionHref).toLowerCase();
-    
-    for (let i = 0; i < navArray.length; i++) {
-        if (!navArray[i]) continue; // skip undefined items
-        const nh = navArray[i].href || '';
-        if (!nh) continue;
-        const decodedNav = decodeURIComponent(nh).toLowerCase();
-        
-        // Try various matching strategies
-        if (decodedSection.indexOf(decodedNav) !== -1 || decodedNav.indexOf(decodedSection) !== -1 ||
-            decodedNav === decodedSection) {
-            console.log('[sectionToNavIndex] matched section', sectionHref, '-> nav index', i, '(href:', nh, ')');
-            return i;
+
+    for (let index = 0; index < state.bookNav.length; index += 1) {
+        const navItem = state.bookNav[index];
+        const navHref = decodeURIComponent(navItem.href || "").toLowerCase();
+
+        if (!navHref) {
+            continue;
+        }
+
+        if (
+            decodedSection === navHref ||
+            decodedSection.includes(navHref) ||
+            navHref.includes(decodedSection)
+        ) {
+            return index;
         }
     }
-    console.log('[sectionToNavIndex] no match found for', sectionHref, 'in', navArray.length, 'nav items');
+
     return -1;
 }
 
-// The "rendered" event fires when a section is loaded
-rendition.on("rendered", (section, view) => {
-    // Update audio manager: map current section -> toc index -> manifest
+function applyFontOverride(sizeStr) {
     try {
-        const idx = sectionToNavIndex(section.href, window.bookNav || []);
-        console.log('[rendition.rendered]', 'section.href:', section.href, 'detected chapter index:', idx);
-        if (typeof audioManager !== 'undefined') {
-            if (idx !== -1) audioManager.setChapterByNavIndex(idx);
-            else audioManager.disable();
+        const views = rendition?.manager?.views || [];
+        const css = `html, body, p, div, span, li, a, h1, h2, h3, h4, h5, h6 { font-size: ${sizeStr} !important; }`;
+
+        views.forEach((view) => {
+            try {
+                const doc = view.document || view.iframe?.contentDocument;
+                if (!doc) {
+                    return;
+                }
+
+                let styleTag = doc.getElementById("user-font-override");
+                if (!styleTag) {
+                    styleTag = doc.createElement("style");
+                    styleTag.id = "user-font-override";
+                    (doc.head || doc.documentElement).appendChild(styleTag);
+                }
+
+                styleTag.textContent = css;
+            } catch (error) {
+                console.warn("Could not apply per-view font override:", error);
+            }
+        });
+    } catch (error) {
+        console.warn("applyFontOverride failed:", error);
+    }
+}
+
+function changeFontSize(stepDirection) {
+    const nextSize = state.currentFontSize + stepDirection * FONT_STEP;
+    state.currentFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, nextSize));
+    const sizeStr = `${state.currentFontSize}%`;
+
+    try {
+        if (rendition?.themes?.fontSize) {
+            rendition.themes.fontSize(sizeStr);
         }
-    } catch (e) { console.error('[rendition.rendered] error in audio mapping:', e); }
+    } catch (error) {
+        console.warn("rendition.themes.fontSize failed:", error);
+    }
 
-    // Check if the iframe and document exist
-    const iframe = view.iframe;
-    if (iframe && iframe.contentDocument) {
-        const doc = iframe.contentDocument;
-        
-        // Initialize Hammer on the internal document of the iframe
-        const hammer = new Hammer(doc.documentElement);
+    safeStorageSet(STORAGE_KEYS.readerFontSize, String(state.currentFontSize));
+    applyFontOverride(sizeStr);
+}
 
-        hammer.on("swipeleft", () => rendition.next());
-        hammer.on("swiperight", () => rendition.prev());
+function setTheme(themeName) {
+    state.currentTheme = themeName;
+    safeStorageSet(STORAGE_KEYS.readerTheme, themeName);
 
-        hammer.on("tap", (ev) => {
-            const x = ev.center.x;
-            const width = (doc && doc.documentElement && doc.documentElement.clientWidth) || iframe.clientWidth || window.innerWidth;
+    elements.body.classList.remove("theme-light", "theme-sepia", "theme-dark");
 
-            // If tap is in the middle 60% of the screen
-            if (x > width * 0.2 && x < width * 0.8) {
-                const top = document.getElementById('hud-top');
-                const bottom = document.getElementById('hud-bottom');
-                if (top) top.classList.toggle('visible');
-                if (bottom) bottom.classList.toggle('visible');
-                // record the toggle time to avoid duplicate parent click toggles
-                window._lastHudToggle = Date.now();
-            } else if (x <= width * 0.2) {
+    try {
+        if (themeName === "light") {
+            rendition.themes.select("light");
+            elements.body.classList.add("theme-light");
+        } else if (themeName === "sepia") {
+            rendition.themes.select("sepia");
+            elements.body.classList.add("theme-sepia");
+        } else {
+            rendition.themes.select("dark");
+            elements.body.classList.add("theme-dark");
+        }
+    } catch (error) {
+        console.warn("Could not set theme:", error);
+    }
+}
+
+function attachIframeInteractions(view) {
+    const iframe = view?.iframe;
+    const doc = iframe?.contentDocument;
+
+    if (!iframe || !doc) {
+        return;
+    }
+
+    const hammer = new Hammer(doc.documentElement);
+
+    hammer.on("swipeleft", () => rendition.next());
+    hammer.on("swiperight", () => rendition.prev());
+
+    hammer.on("tap", (event) => {
+        const width = doc.documentElement?.clientWidth || iframe.clientWidth || window.innerWidth;
+        const xPosition = event.center.x;
+
+        if (xPosition > width * 0.2 && xPosition < width * 0.8) {
+            toggleHUD();
+        } else if (xPosition <= width * 0.2) {
+            rendition.prev();
+        } else {
+            rendition.next();
+        }
+    });
+
+    applyFontOverride(`${state.currentFontSize}%`);
+}
+
+function attachViewerClickFallback(view) {
+    const iframe = view?.iframe;
+    if (!iframe || !elements.viewer) {
+        return;
+    }
+
+    if (elements.viewer._hudClickListener) {
+        elements.viewer.removeEventListener("click", elements.viewer._hudClickListener);
+    }
+
+    elements.viewer._hudClickListener = (event) => {
+        if (state.lastHudToggle && Date.now() - state.lastHudToggle < 400) {
+            return;
+        }
+
+        try {
+            const rect = iframe.getBoundingClientRect();
+            const width = rect.width || window.innerWidth;
+            const xPosition = event.clientX - rect.left;
+
+            if (xPosition > width * 0.2 && xPosition < width * 0.8) {
+                toggleHUD();
+            } else if (xPosition <= width * 0.2) {
                 rendition.prev();
             } else {
                 rendition.next();
             }
-        });
-
-        // When a section renders, ensure any user font override is applied to this document
-        try {
-            const currentSizeStr = `${currentFontSize}%`;
-            if (currentFontSize !== 100) {
-                let style = doc.getElementById('user-font-override');
-                const css = `html, body, p, div, span, li, a, h1, h2, h3, h4, h5, h6 { font-size: ${currentSizeStr} !important; }`;
-                if (!style) {
-                    style = doc.createElement('style');
-                    style.id = 'user-font-override';
-                    (doc.head || doc.documentElement).appendChild(style);
-                }
-                style.textContent = css;
-            }
-        } catch (e) {
-            // ignore
+        } catch (error) {
+            console.warn("Viewer click fallback failed:", error);
         }
+    };
 
-        // parent click fallback: handle regular mouse clicks on the viewer
-        const viewerEl = document.getElementById('viewer');
-        if (viewerEl) {
-            viewerEl._hudClickListener && viewerEl.removeEventListener('click', viewerEl._hudClickListener);
-            viewerEl._hudClickListener = (e) => {
-                try {
-                    // prevent double-toggle if iframe's Hammer already toggled HUD
-                    if (window._lastHudToggle && (Date.now() - window._lastHudToggle) < 400) return;
-
-                    const rect = iframe.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const width = rect.width || window.innerWidth;
-                    if (x > width * 0.2 && x < width * 0.8) {
-                        const top = document.getElementById('hud-top');
-                        const bottom = document.getElementById('hud-bottom');
-                        if (top) top.classList.toggle('visible');
-                        if (bottom) bottom.classList.toggle('visible');
-                        window._lastHudToggle = Date.now();
-                    } else if (x <= width * 0.2) {
-                        rendition.prev();
-                    } else {
-                        rendition.next();
-                    }
-                } catch (err) {
-                    // ignore if iframe not ready
-                }
-            };
-            viewerEl.addEventListener('click', viewerEl._hudClickListener);
-        }
-    }
-});
-
-// Load the Table of Contents
-book.loaded.navigation.then((nav) => {
-    // expose nav for helpers (section -> toc mapping)
-    // convert to real array (EPUBjs may return array-like object)
-    window.bookNav = Array.from(nav || []);
-    console.log('[bookNav] loaded:', window.bookNav.length, 'chapters');
-    if (window.bookNav.length > 0) {
-        const firstValid = window.bookNav.find(n => n && n.label);
-        if (firstValid) console.log('[bookNav] first valid:', firstValid.label, firstValid.href);
-        else console.log('[bookNav] warning: all nav items are undefined or missing label');
-    }
-
-    const tocList = document.getElementById("toc-list");
-    tocList.innerHTML = ""; // Clear existing
-    nav.forEach((chapter) => {
-        if (!chapter) return; // skip undefined items
-        const li = document.createElement("li");
-        li.textContent = chapter.label || "(untitled)";
-        li.style.cursor = "pointer";
-        li.onclick = () => {
-            rendition.display(chapter.href);
-            document.getElementById('side-menu').classList.remove('open');
-        };
-        tocList.appendChild(li);
-    });
-
-    // Ensure audioManager is aware of the section currently displayed (fixes initial disabled state)
-    try {
-        const getCurrentHref = () => {
-            try {
-                // epub.js: prefer currentLocation() then fallback to location()
-                const cur = (typeof rendition.currentLocation === 'function') ? rendition.currentLocation() : (typeof rendition.location === 'function' ? rendition.location() : null);
-                if (cur && cur.start && cur.start.href) return cur.start.href;
-            } catch (e) { /* ignore */ }
-
-            // fallback: use first active view if available
-            try {
-                const views = (rendition && rendition.manager && rendition.manager.views) ? rendition.manager.views : [];
-                if (views.length && views[0] && views[0].section) return views[0].section.href || views[0].href || null;
-            } catch (e) {}
-            return null;
-        };
-
-        const curHref = getCurrentHref();
-        const idx = sectionToNavIndex(curHref, window.bookNav || []);
-        if (idx !== -1 && typeof audioManager !== 'undefined') {
-            audioManager.setChapterByNavIndex(idx);
-        }
-    } catch (e) {
-        // non-fatal
-    }
-});
-
-// progress update when location changes
-rendition.on("relocated", (location) => {
-    let percentage = 0;
-    try {
-        if (book.locations && book.locations.length) {
-            const pct = book.locations.percentageFromCfi(location.start.cfi);
-            percentage = Math.round(pct * 100);
-        }
-    } catch (e) {
-        console.warn('Error reading locations:', e);
-    }
-    const indicator = document.getElementById("location-indicator");
-    if (indicator) indicator.textContent = `Progress: ${percentage}%`;
-});
-
-// Basic Navigation for Buttons
-function prevPage() { rendition.prev(); }
-function nextPage() { rendition.next(); }
-
-// Menu toggle (HUD contents)
-const menuBtn = document.getElementById('menu-btn');
-if (menuBtn) {
-    menuBtn.addEventListener('click', () => {
-        const side = document.getElementById('side-menu');
-        if (side) side.classList.toggle('open');
-    });
+    elements.viewer.addEventListener("click", elements.viewer._hudClickListener);
 }
 
-// Fullscreen toggle (uses Fullscreen API)
-// Toggling the `app-container` element keeps the rest of the page out of fullscreen.
+function clearHudHideTimer() {
+    if (state.hudAutoHideTimer) {
+        window.clearTimeout(state.hudAutoHideTimer);
+        state.hudAutoHideTimer = null;
+    }
+}
+
+function scheduleHudHide() {
+    clearHudHideTimer();
+    state.hudAutoHideTimer = window.setTimeout(() => {
+        hideHUD();
+        state.hudAutoHideTimer = null;
+    }, HUD_AUTOHIDE_DELAY);
+}
+
 function isFullscreen() {
-    return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+    return Boolean(
+        document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.msFullscreenElement
+    );
 }
+
 function toggleFullscreen() {
-    const el = document.getElementById('app-container') || document.documentElement;
+    const fullscreenTarget = elements.appContainer || document.documentElement;
+
     if (!isFullscreen()) {
-        // Request fullscreen on the app container
-        if (el.requestFullscreen) {
-            el.requestFullscreen().catch(err => console.warn('Fullscreen request failed:', err));
-        } else if (el.webkitRequestFullscreen) {
-            el.webkitRequestFullscreen();
-        } else if (el.msRequestFullscreen) {
-            el.msRequestFullscreen();
+        if (fullscreenTarget.requestFullscreen) {
+            fullscreenTarget.requestFullscreen().catch((error) => {
+                console.warn("Fullscreen request failed:", error);
+            });
+        } else if (fullscreenTarget.webkitRequestFullscreen) {
+            fullscreenTarget.webkitRequestFullscreen();
+        } else if (fullscreenTarget.msRequestFullscreen) {
+            fullscreenTarget.msRequestFullscreen();
         }
-    } else {
-        if (document.exitFullscreen) {
-            document.exitFullscreen().catch(err => console.warn('Exit fullscreen failed:', err));
-        } else if (document.webkitExitFullscreen) {
-            document.webkitExitFullscreen();
-        } else if (document.msExitFullscreen) {
-            document.msExitFullscreen();
-        }
+    } else if (document.exitFullscreen) {
+        document.exitFullscreen().catch((error) => {
+            console.warn("Exit fullscreen failed:", error);
+        });
+    } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+    } else if (document.msExitFullscreen) {
+        document.msExitFullscreen();
     }
 }
 
-// Wire up the button and keep its label/state in sync
-const fsBtn = document.getElementById('fullscreen-btn');
-if (fsBtn) {
-    fsBtn.addEventListener('click', toggleFullscreen);
+function onFullscreenChange() {
+    const active = isFullscreen();
 
-    // Auto-hide HUD when in fullscreen
-    const HUD_AUTOHIDE_DELAY = 2000; // ms
-    let _hudAutoHideTimer = null;
+    elements.fullscreenButton?.setAttribute("aria-pressed", String(active));
+    if (elements.fullscreenButton) {
+        elements.fullscreenButton.textContent = active ? "Exit Fullscreen" : "Fullscreen";
+    }
 
-    function showHUD() {
-        const top = document.getElementById('hud-top');
-        const bottom = document.getElementById('hud-bottom');
-        if (top) top.classList.add('visible');
-        if (bottom) bottom.classList.add('visible');
-    }
-    function hideHUD() {
-        // keep HUD visible when the side-menu is open
-        const side = document.getElementById('side-menu');
-        if (side && side.classList.contains('open')) return;
-        const top = document.getElementById('hud-top');
-        const bottom = document.getElementById('hud-bottom');
-        if (top) top.classList.remove('visible');
-        if (bottom) bottom.classList.remove('visible');
-    }
-    function clearHudTimer() {
-        if (_hudAutoHideTimer) {
-            clearTimeout(_hudAutoHideTimer);
-            _hudAutoHideTimer = null;
-        }
-    }
-    function scheduleHudHide() {
-        clearHudTimer();
-        _hudAutoHideTimer = setTimeout(() => {
-            hideHUD();
-            _hudAutoHideTimer = null;
-        }, HUD_AUTOHIDE_DELAY);
-    }
-    function showHUDTemporarily() {
-        if (!isFullscreen()) return; // only auto-show when fullscreen
+    elements.body.classList.toggle("is-fullscreen", active);
+
+    clearHudHideTimer();
+
+    if (active) {
         showHUD();
         scheduleHudHide();
+    } else {
+        showHUD();
     }
-
-    const activityHandler = (ev) => {
-        if (!isFullscreen()) return;
-        showHUDTemporarily();
-    };
-
-    document.addEventListener('mousemove', activityHandler, { passive: true });
-    document.addEventListener('touchstart', activityHandler, { passive: true });
-    document.addEventListener('keydown', (ev) => {
-        // let 'f' keep its toggle behavior; other keys reveal HUD while fullscreen
-        if (!isFullscreen()) return;
-        if (ev.key === 'f' || ev.key === 'F') return;
-        activityHandler(ev);
-    });
-
-    const onFullscreenChange = () => {
-        const active = isFullscreen();
-        fsBtn.textContent = active ? '⤢ Exit Fullscreen' : '⤢ Fullscreen';
-        fsBtn.setAttribute('aria-pressed', String(active));
-        document.body.classList.toggle('is-fullscreen', active);
-
-        clearHudTimer();
-        if (active) {
-            // show briefly then auto-hide
-            showHUD();
-            scheduleHudHide();
-        } else {
-            // leaving fullscreen -> ensure HUD visible
-            showHUD();
-        }
-    };
-
-    document.addEventListener('fullscreenchange', onFullscreenChange);
 }
 
-// Optional keyboard shortcut: press "f" to toggle fullscreen (only when focused on the app)
-document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'f' || ev.key === 'F') {
-        // don't intercept when typing in inputs
-        if ((document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable))) return;
-        toggleFullscreen();
+function handleFullscreenActivity(event) {
+    if (!isFullscreen()) {
+        return;
+    }
+
+    if (event?.type === "keydown" && (event.key === "f" || event.key === "F")) {
+        return;
+    }
+
+    showHUD();
+    scheduleHudHide();
+}
+
+rendition.on("rendered", (section, view) => {
+    attachIframeInteractions(view);
+    attachViewerClickFallback(view);
+
+    const tocIndex = sectionToNavIndex(section?.href);
+    if (tocIndex >= 0) {
+        const chapter = state.bookNav[tocIndex];
+        updateLocationIndicator(`Reading: ${chapter.label}`);
     }
 });
 
-// Register basic themes so `setTheme` works
+book.loaded.navigation
+    .then((navigation) => {
+        buildToc(navigation);
+    })
+    .catch((error) => {
+        console.warn("Could not load navigation:", error);
+        updateLocationIndicator("Opened Cereus & Limnic, but the table of contents could not be loaded.");
+    });
+
+rendition.on("relocated", (location) => {
+    let percentage = 0;
+
+    try {
+        if (location?.start?.cfi) {
+            safeStorageSet(STORAGE_KEYS.readerLocation, location.start.cfi);
+        }
+
+        if (book.locations?.length) {
+            const progressValue = book.locations.percentageFromCfi(location.start.cfi);
+            percentage = Math.round(progressValue * 100);
+        }
+    } catch (error) {
+        console.warn("Error reading locations:", error);
+    }
+
+    const tocIndex = sectionToNavIndex(location?.start?.href);
+    const chapterText = tocIndex >= 0 ? ` - ${state.bookNav[tocIndex].label}` : "";
+    updateLocationIndicator(`Progress: ${percentage}%${chapterText}`);
+});
+
 try {
-    rendition.themes.register("dark", { "body": { "background": "#1a1a1a", "color": "#e0e0e0" } });
-    rendition.themes.register("sepia", { "body": { "background": "#f4ecd8", "color": "#5b4636" } });
-} catch (e) {
-    console.warn('Could not register themes:', e);
+    rendition.themes.register("dark", {
+        body: {
+            background: "#111922",
+            color: "#ecf5fb",
+        },
+        a: {
+            color: "#7ad7f2",
+        },
+    });
+
+    rendition.themes.register("sepia", {
+        body: {
+            background: "#f4e7d2",
+            color: "#4f3925",
+        },
+        a: {
+            color: "#8d6f50",
+        },
+    });
+
+    rendition.themes.register("light", {
+        body: {
+            background: "#ffffff",
+            color: "#182430",
+        },
+        a: {
+            color: "#41748c",
+        },
+    });
+} catch (error) {
+    console.warn("Could not register themes:", error);
 }
 
-// Dynamic font sizing
-let currentFontSize = 100;
-function changeFontSize(v) {
-    currentFontSize += (v * 10);
-    const sizeStr = `${currentFontSize}%`;
-    // Preferred API
-    try {
-        if (rendition && rendition.themes && typeof rendition.themes.fontSize === 'function') {
-            rendition.themes.fontSize(sizeStr);
-            console.log('Font size set via rendition.themes.fontSize:', sizeStr);
-            return;
+elements.menuButton?.addEventListener("click", () => {
+    if (elements.sideMenu?.classList.contains("open")) {
+        closeSideMenu();
+    } else {
+        openSideMenu();
+    }
+});
+
+elements.menuCloseButton?.addEventListener("click", closeSideMenu);
+
+elements.themeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+        const themeName = button.dataset.theme || "dark";
+        setTheme(themeName);
+    });
+});
+
+elements.fullscreenButton?.addEventListener("click", toggleFullscreen);
+
+document.addEventListener("fullscreenchange", onFullscreenChange);
+document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+document.addEventListener("msfullscreenchange", onFullscreenChange);
+
+document.addEventListener("mousemove", handleFullscreenActivity, { passive: true });
+document.addEventListener("touchstart", handleFullscreenActivity, { passive: true });
+document.addEventListener("keydown", handleFullscreenActivity);
+
+document.addEventListener("keydown", (event) => {
+    if (event.key === "f" || event.key === "F") {
+        const activeElement = document.activeElement;
+        const isTypingTarget =
+            activeElement &&
+            (activeElement.tagName === "INPUT" ||
+                activeElement.tagName === "TEXTAREA" ||
+                activeElement.isContentEditable);
+
+        if (!isTypingTarget) {
+            toggleFullscreen();
         }
-    } catch (e) {
-        console.warn('rendition.themes.fontSize failed:', e);
     }
 
-    // Fallback: set inline style on loaded iframe documents
-    try {
-        const views = rendition.manager && rendition.manager.views ? rendition.manager.views : [];
-        views.forEach(view => {
-            try {
-                const doc = view.document || (view.iframe && view.iframe.contentDocument);
-                if (doc && doc.documentElement) {
-                    doc.documentElement.style.fontSize = sizeStr;
-                }
-            } catch (e) {
-                // ignore per-view errors
-            }
-        });
-        console.log('Font size applied via iframe fallback:', sizeStr);
-    } catch (e) {
-        console.warn('Could not change font size (fallback):', e);
+    if (event.key === "Escape" && elements.sideMenu?.classList.contains("open")) {
+        closeSideMenu();
     }
-}
+});
 
-// Apply a stronger CSS override inside each rendition iframe to force font-size changes
-function applyFontOverride(sizeStr) {
-    try {
-        const views = (rendition && rendition.manager && rendition.manager.views) ? rendition.manager.views : [];
-        const css = `html, body, p, div, span, li, a, h1, h2, h3, h4, h5, h6 { font-size: ${sizeStr} !important; }`;
-        views.forEach(view => {
-            try {
-                const doc = view.document || (view.iframe && view.iframe.contentDocument);
-                if (!doc) return;
-                let style = doc.getElementById('user-font-override');
-                if (!style) {
-                    style = doc.createElement('style');
-                    style.id = 'user-font-override';
-                    (doc.head || doc.documentElement).appendChild(style);
-                }
-                style.textContent = css;
-            } catch (e) {
-                // ignore per-view errors
-            }
-        });
-    } catch (e) {
-        console.warn('applyFontOverride failed:', e);
-    }
-}
+setTheme(state.currentTheme);
+applyFontOverride(`${state.currentFontSize}%`);
 
-// Theme selector used by UI buttons
-function setTheme(theme) {
-    try {
-        // Keep a body class so CSS can adapt (TOC text color, etc.)
-        document.body.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
-        if (theme === 'light') {
-            rendition.themes.select('default');
-            document.body.style.background = '#ffffff';
-            document.body.classList.add('theme-light');
-        } else if (theme === 'dark') {
-            rendition.themes.select('dark');
-            document.body.style.background = '#1a1a1a';
-            document.body.classList.add('theme-dark');
-        } else if (theme === 'sepia') {
-            rendition.themes.select('sepia');
-            document.body.style.background = '#f4ecd8';
-            document.body.classList.add('theme-sepia');
-        } else {
-            // unknown theme: fall back to default
-            rendition.themes.select('default');
-            document.body.classList.add('theme-light');
-        }
-    } catch (e) {
-        console.warn('Could not set theme:', e);
-    }
-}
-
-// Expose UI functions globally for inline onclick handlers
-try { window.changeFontSize = changeFontSize; } catch (e) {}
-try { window.setTheme = setTheme; } catch (e) {}
+window.changeFontSize = changeFontSize;
+window.setTheme = setTheme;

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#071018">
+    <title>Cereus &amp; Limnic | Audiobook</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="theme-dark audiobook-page">
+    <main class="listen-shell">
+        <header class="listen-header">
+            <div>
+                <p class="eyebrow">Listen mode</p>
+                <h1>Cereus &amp; Limnic</h1>
+            </div>
+
+            <div class="listen-nav">
+                <a class="button-link inline-link" href="index.html">Home</a>
+                <a class="button-link inline-link" href="reader.html">Read Mode</a>
+            </div>
+        </header>
+
+        <section class="listen-layout">
+            <article class="player-panel">
+                <img src="assets/cereus-limnic-audiobook-cover.png" alt="Cereus and Limnic audiobook cover" class="audio-cover">
+                <p class="player-label">Now selected</p>
+                <h2 id="audio-book-title">Cereus &amp; Limnic</h2>
+                <p id="current-chapter-title" class="current-chapter-title">Loading tracks...</p>
+                <p id="chapter-hint" class="chapter-hint">Choose a chapter, then press play when you're ready.</p>
+
+                <audio id="chapter-audio" preload="metadata" class="audio-element"></audio>
+
+                <div class="playback-cluster" aria-label="Audiobook controls">
+                    <div class="playback-buttons">
+                        <button id="prev-track-btn" type="button" class="transport-button">Previous</button>
+                        <button id="skip-backward-btn" type="button" class="transport-button compact">-15s</button>
+                        <button id="play-pause-btn" type="button" class="transport-button primary">Play</button>
+                        <button id="skip-forward-btn" type="button" class="transport-button compact">+30s</button>
+                        <button id="next-track-btn" type="button" class="transport-button">Next</button>
+                    </div>
+
+                    <input id="seek-bar" class="progress-input" type="range" min="0" max="0" value="0" step="1" aria-label="Seek within current track">
+
+                    <div class="time-row" aria-label="Playback time">
+                        <span id="current-time">0:00</span>
+                        <span id="total-time">0:00</span>
+                    </div>
+
+                    <div class="speed-row">
+                        <label for="speed-select">Speed</label>
+                        <select id="speed-select" aria-label="Playback speed">
+                            <option value="0.8">0.8x</option>
+                            <option value="1">1x</option>
+                            <option value="1.25">1.25x</option>
+                            <option value="1.5">1.5x</option>
+                            <option value="1.75">1.75x</option>
+                            <option value="2">2x</option>
+                        </select>
+                    </div>
+                </div>
+
+                <p id="audio-status" class="audio-status" role="status" aria-live="polite">
+                    Loading audiobook manifest...
+                </p>
+            </article>
+
+            <aside class="chapters-panel" aria-label="Audiobook chapters">
+                <div class="chapters-header">
+                    <h2>Chapters</h2>
+                    <span id="chapter-count" class="chapter-count">0 tracks</span>
+                </div>
+                <ul id="audio-chapter-list" class="audio-chapter-list"></ul>
+            </aside>
+        </section>
+    </main>
+
+    <script src="listen.js"></script>
+</body>
+</html>
